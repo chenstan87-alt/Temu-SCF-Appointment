@@ -1,11 +1,16 @@
-import pandas as pd
-import numpy as np
-from shapely.geometry import Point, Polygon, box
-import matplotlib.pyplot as plt
-import pymysql
+# coding=utf-8
+import os
 import warnings
-from pandas.tseries.offsets import BDay
+from datetime import datetime
+from typing import Tuple
+
+import numpy as np
+import pandas as pd
+import pymysql
 import streamlit as st
+from pandas.tseries.offsets import BDay
+
+warnings.filterwarnings("ignore")
 
 
 # ---------- Secrets (read at runtime) ----------
@@ -21,7 +26,7 @@ def get_scf_appointment() -> pd.DataFrame:
     """
     Fetch large-mawb dataset from CBS (cached).
     """
-    db_cbs = _get_db_conf("db_cbs")
+    db_cbs = _get_db_conf("db_wms")
     conn = pymysql.connect(
         host=db_cbs["host"],
         port=int(db_cbs.get("port", 3306)),
@@ -31,9 +36,6 @@ def get_scf_appointment() -> pd.DataFrame:
         charset="utf8"
     )
 
-    warnings.filterwarnings("ignore")  # 忽略警告
-    conn = pymysql.connect(host='database-1.cxoq60uaktfd.us-east-1.rds.amazonaws.com', port=3306, user='stan',
-                           password='(C3X(25#+CbCh5bO', database='prd_oversea_wms', charset='utf8')  # 连接数据库
     sql_ = r"""
     SELECT * FROM (
         SELECT w.warehouse_code AS warehouseCode,pl.pallet_no AS containerNo, IF(pl.`STATUS`= 0,'inbound','loaded') AS conStatus,pl.channel AS channel, pl.customs_status AS cbpStatus,pl.pga_status AS pgaStatus, m.ata AS ata,pl.PLT_BOX_NUM AS boxCount,pl.create_time AS createTime  
