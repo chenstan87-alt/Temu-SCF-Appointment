@@ -38,24 +38,24 @@ def get_scf_appointment() -> pd.DataFrame:
 
     sql_ = r"""
     SELECT * FROM (
-        SELECT w.warehouse_code AS warehouseCode,pl.pallet_no AS containerNo, IF(pl.`STATUS`= 0,'inbound','loaded') AS conStatus,pl.channel AS channel, pl.customs_status AS cbpStatus,pl.pga_status AS pgaStatus, m.ata AS ata,pl.PLT_BOX_NUM AS boxCount,pl.create_time AS createTime  
-        FROM ifm_warehouse_pallet pl 
-        LEFT JOIN ifm_warehouse_bag b ON b.pallet_id = pl.id AND b.mark = 1
-        LEFT JOIN ifm_warehouse_mawb m ON m.id = b.warehouse_mawb_id AND m.mark= 1
-        LEFT JOIN sys_warehouse w ON pl.warehouse_id = w.id 
-        WHERE pl.mark= 1 AND pl.`STATUS` IN (0,1)
-        GROUP BY pl.id
-        UNION 
-        SELECT w.warehouse_code AS warehouseCode,gl.gayload_no AS containerNo,  IF(gl.`STATUS`= 0,'inbound','loaded') AS conStatus,gl.channel AS channel, gl.customs_status AS cbpStatus,gl.pga_status AS pgaStatus, m.ata AS ata,gl.pieces AS boxCount,gl.create_time AS createTime  
-        FROM ifm_warehouse_gayload gl 
-        LEFT JOIN ifm_warehouse_bag b ON b.pallet_id = gl.id AND b.mark = 1
-        LEFT JOIN ifm_warehouse_mawb m ON m.id = b.warehouse_mawb_id AND m.mark= 1
-        LEFT JOIN sys_warehouse w ON gl.warehouse_id = w.id 
-        WHERE gl.mark= 1 AND gl.`STATUS` IN (0,1)
-        GROUP BY gl.id
-    ) AS temp 
-    WHERE createTime > '2026-01-01 00:00:00'
-    ORDER BY warehouseCode,createTime DESC
+	SELECT w.warehouse_code AS warehouseCode,pl.pallet_no AS containerNo, IF(pl.`STATUS`= 0,'inbound','loaded') AS conStatus,pl.channel AS channel, pl.customs_status AS cbpStatus,pl.pga_status AS pgaStatus, MIN(m.ata) AS ata,pl.PLT_BOX_NUM AS boxCount,pl.create_time AS createTime  
+	FROM ifm_warehouse_pallet pl 
+	LEFT JOIN ifm_warehouse_bag b ON b.pallet_id = pl.id AND b.mark = 1
+	LEFT JOIN ifm_warehouse_mawb m ON m.id = b.warehouse_mawb_id AND m.mark= 1
+	LEFT JOIN sys_warehouse w ON pl.warehouse_id = w.id 
+	WHERE pl.mark= 1 AND pl.`STATUS` IN (0,1)
+	GROUP BY pl.id
+	UNION 
+	SELECT w.warehouse_code AS warehouseCode,gl.gayload_no AS containerNo,  IF(gl.`STATUS`= 0,'inbound','loaded') AS conStatus,gl.channel AS channel, gl.customs_status AS cbpStatus,gl.pga_status AS pgaStatus, MIN(m.ata) AS ata,gl.pieces AS boxCount,gl.create_time AS createTime  
+	FROM ifm_warehouse_gayload gl 
+	LEFT JOIN ifm_warehouse_bag b ON b.gayload_id = gl.id AND b.mark = 1
+	LEFT JOIN ifm_warehouse_mawb m ON m.id = b.warehouse_mawb_id AND m.mark= 1
+	LEFT JOIN sys_warehouse w ON gl.warehouse_id = w.id 
+	WHERE gl.mark= 1 AND gl.`STATUS` IN (0,1)
+	GROUP BY gl.id
+) AS temp 
+WHERE createTime > '2026-01-01 00:00:00' 
+ORDER BY warehouseCode,createTime DESC;
     """
 
     container = pd.read_sql(sql_, conn)  # select来查询数据
