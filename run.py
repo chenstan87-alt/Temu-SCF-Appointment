@@ -101,7 +101,7 @@ ORDER BY warehouseCode,createTime DESC;
 
     def add_3_5_business_days(t):
         # 先加 3 个工作日
-        if t['channel_info']=="USPSGRR":
+        if t['channel']=="USPSGRR":
             # 1️⃣ 先加 3 个工作日
             t['base_time'] = t['base_time'] + BDay(3)
 
@@ -150,7 +150,7 @@ ORDER BY warehouseCode,createTime DESC;
             return (t - pd.Timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
         else:
             return t
-    container_info['outbound_ddl']=container_info['outbound_ddl'].apply(adjust_time,axis=1)
+    container_info['outbound_ddl']=container_info['outbound_ddl'].apply(adjust_time)
 
     # 数据池 A
     df_pool_a=container_info.copy()
@@ -203,7 +203,7 @@ ORDER BY warehouseCode,createTime DESC;
                         '绑定的Container No': ', '.join([c['containerNo'] for c in current_truck_containers]),
                         # 拼接所有渠道 (去重)
                         '渠道': ', '.join(sorted(list(set([c['channel'] for c in current_truck_containers])))),
-                        'nass code': ', '.join(sorted(list(set([c['m=nasscode'] for c in current_truck_containers])))),
+                        'nass code': ', '.join(sorted(list(set([str(c['nasscode']) for c in current_truck_containers])))),
                         '实际装载大箱数': current_truck_load
                     })
                     truck_counter += 1
@@ -225,7 +225,7 @@ ORDER BY warehouseCode,createTime DESC;
                 '出库时间': min(c['outbound_ddl'] for c in current_truck_containers),
                 '绑定的Container No': ', '.join([c['containerNo'] for c in current_truck_containers]),
                 '渠道': ', '.join(sorted(list(set([c['channel'] for c in current_truck_containers])))),
-                'nass code': ', '.join(sorted(list(set([c['m=nasscode'] for c in current_truck_containers])))),
+                'nass code': ', '.join(sorted(list(set([str(c['nasscode']) for c in current_truck_containers])))),
                 '实际装载大箱数': current_truck_load
             })
             truck_counter += 1
