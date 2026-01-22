@@ -101,7 +101,8 @@ ORDER BY warehouseCode,createTime DESC;
 
     def add_3_5_business_days(t):
         # 先加 3 个工作日
-        if t['channel']=="USPSGRR":
+        channel_val = t.get('channel', '')
+        if channel_val=="USPSGRR":
             # 1️⃣ 先加 3 个工作日
             t['base_time'] = t['base_time'] + BDay(3)
 
