@@ -159,85 +159,100 @@ ORDER BY warehouseCode,createTime DESC;
     df_route_map = pd.read_excel('channel_route.xlsx')
 
     # ==========================================
-    # 2. 排序 (Step 2 )
+    # 2. 核心算法逻辑
     # ==========================================
 
-    # 关联线路 (Left Join)
-    df_pool_a = pd.merge(df_pool_a, df_route_map, on='channel', how='left')
+    def optimize_truck_loading(df_pool, df_map):
+        df_b = pd.merge(df_pool, df_map, on='channel', how='left')
 
-    # 去除没有匹配到线路的数据 (可选，防止报错)
-    df_pool_a = df_pool_a.dropna(subset=['route'])
+        # 去掉没有匹配到线路的数据 (为了安全)
+        df_b = df_b.dropna(subset=['route', 'nasscode'])
 
-    # 按照出库时间排序 (FIFO)
-    df_pool_a = df_pool_a.sort_values(by='outbound_ddl')
+        # 按照出库时间排序 (FIFO)
+        df_b = df_b.sort_values(by='outbound_ddl')
+
+        # --- Step 3 & 4: 拼车循环 ---
+        trucks_result = []
+        truck_counter = 1
+
+        # 按线路分组 (不同线路绝对不能拼)
+        for route, group in df_b.groupby('route'):
+
+            # 初始化当前车状态
+            current_truck = {
+                'containers': [],  # 存整行数据
+                'load': 0,  # 当前大箱数
+                'stops': set()  # 当前涉及的Stop点 (使用Set集合自动去重)
+            }
+
+            for idx, row in group.iterrows():
+                box_count = row['boxCount']
+                stop_point = row['nasscode']
+
+                # --- 预判逻辑 ---
+                # 1. 预判体积: 如果加上这个柜子，是否超过 312?
+                is_volume_ok = (current_truck['load'] + box_count) <= 312
+
+                # 2. 预判Stop: 加上这个新Stop后，总Stop数量是否超过 3?
+                # 使用 union 预计算，不改变当前状态
+                future_stops = current_truck['stops'].union({stop_point})
+                is_stops_ok = len(future_stops) <= 3
+
+                # --- 决策 ---
+                if is_volume_ok and is_stops_ok:
+                    # [情况A]: 满足所有条件 -> 装入当前车
+                    current_truck['containers'].append(row)
+                    current_truck['load'] += box_count
+                    current_truck['stops'] = future_stops  # 更新Stop集合
+
+                else:
+                    # [情况B]: 不满足 -> 封车，开新车
+
+                    # 1. 保存上一辆车 (如果不是空车)
+                    if current_truck['containers']:
+                        save_truck(trucks_result, current_truck, truck_counter, route)
+                        truck_counter += 1
+
+                    # 2. 初始化新车，并装入当前这个 Container
+                    current_truck = {
+                        'containers': [row],
+                        'load': box_count,
+                        'stops': {stop_point}
+                    }
+
+            # 循环结束，处理最后一辆未满的车
+            if current_truck['containers']:
+                save_truck(trucks_result, current_truck, truck_counter, route)
+                truck_counter += 1
+
+        return pd.DataFrame(trucks_result)
+
+    # 辅助函数: 将车辆信息格式化并保存
+    def save_truck(result_list, truck_data, truck_id, route):
+        containers = truck_data['containers']
+
+        # 提取信息
+        earliest_time = min(c['outbound_ddl'] for c in containers)
+        container_nos = [c['containerNo'] for c in containers]
+        channels = list(set([c['channel'] for c in containers]))  # 去重
+        stops = (list(set([str(c['nasscode']) for c in containers])))
+
+        result_list.append({
+            '车次': f"{truck_id:03d}",
+            '出库时间': earliest_time,
+            '线路': route,
+            'Container_Nos': ', '.join(container_nos),
+            '渠道': ', '.join(channels),
+            # 额外展示验证数据，方便检查
+            'Stop点数': len(stops),
+            'Stop列表': ', '.join(stops),
+            '总大箱数': truck_data['load']
+        })
 
     # ==========================================
-    # 3. 核心拼车算法 (Step 3) - 限制 312 大箱
+    # 3. 运行与输出
     # ==========================================
 
-    MAX_BOXES_PER_TRUCK = 312
-    trucks_result = []
-    truck_counter = 1
+    df_result = optimize_truck_loading(df_pool_a, df_route_map)
 
-    # 按线路分组处理
-    for route, group_df in df_pool_a.groupby('route'):
-
-        # 初始化当前车的缓存
-        current_truck_containers = []
-        current_truck_load = 0
-
-        # 遍历该线路下的所有 Container
-        for idx, row in group_df.iterrows():
-            box_count = row['boxCount']
-
-            # 判断：如果加上当前这个箱子，是否会超载？
-            if current_truck_load + box_count > MAX_BOXES_PER_TRUCK:
-
-                # --- A. 结算上一辆车 (如果缓存里有货) ---
-                if current_truck_containers:
-                    trucks_result.append({
-                        '车次': f"{truck_counter:03d}",
-                        '线路': route,
-                        # 取本车中最早的出库时间
-                        '出库时间': min(c['outbound_ddl'] for c in current_truck_containers),
-                        # 拼接所有 Container No
-                        '绑定的Container No': ', '.join([c['containerNo'] for c in current_truck_containers]),
-                        # 拼接所有渠道 (去重)
-                        '渠道': ', '.join(sorted(list(set([c['channel'] for c in current_truck_containers])))),
-                        'nass code': ', '.join(sorted(list(set([str(c['nasscode']) for c in current_truck_containers])))),
-                        '实际装载大箱数': current_truck_load
-                    })
-                    truck_counter += 1
-
-                # --- B. 开启新车，并放入当前这个导致超载的箱子 ---
-                current_truck_containers = [row]
-                current_truck_load = box_count
-
-            else:
-                # --- C. 未超载，继续装入当前车 ---
-                current_truck_containers.append(row)
-                current_truck_load += box_count
-
-        # --- D. 循环结束，处理最后一辆未满的车 ---
-        if current_truck_containers:
-            trucks_result.append({
-                '车次': f"{truck_counter:03d}",
-                '线路': route,
-                '出库时间': min(c['outbound_ddl'] for c in current_truck_containers),
-                '绑定的Container No': ', '.join([c['containerNo'] for c in current_truck_containers]),
-                '渠道': ', '.join(sorted(list(set([c['channel'] for c in current_truck_containers])))),
-                'nass code': ', '.join(sorted(list(set([str(c['nasscode']) for c in current_truck_containers])))),
-                '实际装载大箱数': current_truck_load
-            })
-            truck_counter += 1
-
-    # ==========================================
-    # 4. 输出结果 (Step 4)
-    # ==========================================
-
-    df_final = pd.DataFrame(trucks_result)
-
-    # 格式化时间列，看起来更整洁
-    df_final['出库时间'] = df_final['出库时间'].dt.strftime('%Y-%m-%d %H:%M')
-
-    return df_final
+    return df_result
