@@ -65,7 +65,8 @@ ORDER BY warehouseCode,createTime DESC;
         (container['cbpStatus'] == 0) &
         (container['pgaStatus'] == 2) &
         (container['warehouseCode'] == 'JFK1')&(container['conStatus']=='inbound')]
-    container_info = container_[container_['containerNo'].str.startswith('99M', na=False)]
+    container_info = container_[
+        container_['channel'].str.startswith('USPS', na=False) & (container_['channel'].str.len() == 7)]
     container_info['ata']=container_info['ata']-pd.Timedelta(hours=5)
     container_info['scf_type']='1'
 
@@ -153,106 +154,130 @@ ORDER BY warehouseCode,createTime DESC;
             return t
     container_info['outbound_ddl']=container_info['outbound_ddl'].apply(adjust_time)
 
-    # 数据池 A
-    df_pool_a=container_info.copy()
+    # 数据池
+    df_pool=container_info.copy()
     # 模拟渠道-线路关系表
     df_route_map = pd.read_excel('channel_route.xlsx')
 
     # ==========================================
-    # 2. 核心算法逻辑
+    # 2. 核心算法函数
     # ==========================================
 
-    def optimize_truck_loading(df_pool, df_map):
-        df_b = pd.merge(df_pool, df_map, on='channel', how='left')
+    def dynamic_consolidation(df_data, df_map):
+        # --- 预处理 ---
+        # 关联线路信息
+        df_pool = pd.merge(df_data, df_map, on='channel', how='left')
+        df_pool = df_pool.dropna(subset=['route', 'stops'])  # 剔除无效数据
 
-        # 去掉没有匹配到线路的数据 (为了安全)
-        df_b = df_b.dropna(subset=['route', 'nasscode'])
+        # 确保每个 container 都有唯一索引，方便后续剔除
+        df_pool = df_pool.reset_index(drop=True)
+        df_pool['is_shipped'] = False  # 标记是否已发货
 
-        # 按照出库时间排序 (FIFO)
-        df_b = df_b.sort_values(by='outbound_ddl')
-
-        # --- Step 3 & 4: 拼车循环 ---
         trucks_result = []
         truck_counter = 1
 
-        # 按线路分组 (不同线路绝对不能拼)
-        for route, group in df_b.groupby('route'):
+        # --- 主循环：只要还有未发货的 Container，就继续 ---
+        while df_pool['is_shipped'].sum() < len(df_pool):
 
-            # 初始化当前车状态
+            # 1. 获取当前剩余的数据 (Pool View)
+            remaining_mask = df_pool['is_shipped'] == False
+            df_remaining = df_pool[remaining_mask].copy()
+
+            if df_remaining.empty:
+                break
+
+            # 2. 计算动态优先级 (Dynamic Priority)
+            # 统计每个 Stop 当前最早的 DDL
+            stop_stats = df_remaining.groupby(['route', 'stops'])['outbound_ddl'].min().reset_index()
+            stop_stats = stop_stats.rename(columns={'outbound_ddl': 'priority_time'})
+            # 按时间排序，这一步决定了当前这辆车"最想"去哪个 Stop
+            stop_priority_list = stop_stats.sort_values(by='priority_time')
+
+            # 3. 初始化新车
             current_truck = {
-                'containers': [],  # 存整行数据
-                'load': 0,  # 当前大箱数
-                'stops': set()  # 当前涉及的Stop点 (使用Set集合自动去重)
+                'indices': [],  # 记录装了哪些行的索引
+                'load': 0,
+                'stops': set(),
+                'route': None  # 这一车绑定的线路
             }
 
-            for idx, row in group.iterrows():
-                box_count = row['boxCount']
-                stop_point = row['nasscode']
+            # 4. 尝试按优先级装货
+            # 遍历排好序的 Stop 列表
+            for _, priority_row in stop_priority_list.iterrows():
+                target_route = priority_row['route']
+                target_stop = priority_row['stops']
 
-                # --- 预判逻辑 ---
-                # 1. 预判体积: 如果加上这个柜子，是否超过 312?
-                is_volume_ok = (current_truck['load'] + box_count) <= 312
+                # [规则 A] 线路一致性检查
+                # 如果车还是空的，确定线路；如果车不空，必须和车的线路一致
+                if current_truck['route'] is None:
+                    current_truck['route'] = target_route
+                elif current_truck['route'] != target_route:
+                    continue  # 线路不同，不能拼，看下一个 Stop
 
-                # 2. 预判Stop: 加上这个新Stop后，总Stop数量是否超过 3?
-                # 使用 union 预计算，不改变当前状态
-                future_stops = current_truck['stops'].union({stop_point})
-                is_stops_ok = len(future_stops) <= 3
+                # [规则 B] Stop 数量检查
+                # 如果是新 Stop，且车里已经有3个 Stop 了，跳过
+                is_new_stop = target_stop not in current_truck['stops']
+                if is_new_stop and len(current_truck['stops']) >= 3:
+                    continue
 
-                # --- 决策 ---
-                if is_volume_ok and is_stops_ok:
-                    # [情况A]: 满足所有条件 -> 装入当前车
-                    current_truck['containers'].append(row)
-                    current_truck['load'] += box_count
-                    current_truck['stops'] = future_stops  # 更新Stop集合
+                    # --- 开始装载该 Stop 的货 ---
+                # 找出该 Stop 下剩余的所有 Container，并按时间排序 (内部 FIFO)
+                candidates = df_remaining[
+                    (df_remaining['route'] == target_route) &
+                    (df_remaining['stops'] == target_stop)
+                    ].sort_values(by='outbound_ddl')
 
-                else:
-                    # [情况B]: 不满足 -> 封车，开新车
+                truck_is_full = False
 
-                    # 1. 保存上一辆车 (如果不是空车)
-                    if current_truck['containers']:
-                        save_truck(trucks_result, current_truck, truck_counter, route)
-                        truck_counter += 1
+                for idx, row in candidates.iterrows():
+                    box_count = row['boxCount']
 
-                    # 2. 初始化新车，并装入当前这个 Container
-                    current_truck = {
-                        'containers': [row],
-                        'load': box_count,
-                        'stops': {stop_point}
-                    }
+                    # [规则 C] 体积检查 (Max 312)
+                    if current_truck['load'] + box_count <= 312:
+                        # 装入
+                        current_truck['indices'].append(idx)
+                        current_truck['load'] += box_count
+                        current_truck['stops'].add(target_stop)
+                    else:
+                        # 装不下了 -> 车满了
+                        truck_is_full = True
+                        break  # 停止装载当前 Stop，同时也意味着整车结束
 
-            # 循环结束，处理最后一辆未满的车
-            if current_truck['containers']:
-                save_truck(trucks_result, current_truck, truck_counter, route)
+                if truck_is_full:
+                    break  # 停止遍历后续 Stop，发车
+
+            # 5. 封车与标记
+            if current_truck['indices']:
+                # 在主表中标记这些 Container 为已发货
+                df_pool.loc[current_truck['indices'], 'is_shipped'] = True
+
+                # 收集结果数据
+                packed_data = df_pool.loc[current_truck['indices']]
+                save_truck(trucks_result, packed_data, current_truck, truck_counter)
                 truck_counter += 1
+            else:
+                # 防死循环：如果找不到任何可装的货(逻辑上不太可能，除非所有货都超大无法装入空车)，强制退出
+                break
 
         return pd.DataFrame(trucks_result)
 
-    # 辅助函数: 将车辆信息格式化并保存
-    def save_truck(result_list, truck_data, truck_id, route):
-        containers = truck_data['containers']
-
-        # 提取信息
-        earliest_time = min(c['outbound_ddl'] for c in containers)
-        container_nos = [c['containerNo'] for c in containers]
-        channels = list(set([c['channel'] for c in containers]))  # 去重
-        stops = (list(set([str(c['nasscode']) for c in containers])))
-
+    def save_truck(result_list, packed_df, truck_info, truck_id):
+        stops_list = sorted([str(s) for s in list(truck_info['stops'])])
         result_list.append({
             '车次': f"{truck_id:03d}",
-            '出库时间': earliest_time,
-            '线路': route,
-            'Container_Nos': ', '.join(container_nos),
-            '渠道': ', '.join(channels),
-            # 额外展示验证数据，方便检查
-            'Stop点数': len(stops),
-            'Stop列表': ', '.join(stops),
-            '总大箱数': truck_data['load']
+            '出库时间': packed_df['outbound_ddl'].min(),  # 这一车最早的时间
+            'Stop数量': len(stops_list),
+            'Stop点位': ', '.join(stops_list),
+            '总大箱数': truck_info['load'],
+            'Container数量': len(packed_df),
+            'Container号码': ', '.join(packed_df['containerNo']),
+            '渠道': ', '.join(sorted(packed_df['channel'].unique()))
         })
 
     # ==========================================
-    # 3. 运行与输出
+    # 3. 执行与输出
     # ==========================================
 
-    df_result = optimize_truck_loading(df_pool_a, df_route_map)
+    df_final = dynamic_consolidation(df_pool, df_route_map)
 
-    return df_result
+    return df_final
