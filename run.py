@@ -45,6 +45,7 @@ def get_scf_appointment() -> pd.DataFrame:
 	LEFT JOIN sys_warehouse w ON pl.warehouse_id = w.id 
 	WHERE pl.mark= 1 AND pl.`STATUS` IN (0,1)
 	GROUP BY pl.id
+	HAVING count(b.id) > 0
 	UNION 
 	SELECT w.warehouse_code AS warehouseCode,gl.gayload_no AS containerNo,  IF(gl.`STATUS`= 0,'inbound','loaded') AS conStatus,gl.channel AS channel, gl.customs_status AS cbpStatus,gl.pga_status AS pgaStatus, MIN(m.ata) AS ata,gl.pieces AS boxCount,gl.create_time AS createTime  
 	FROM ifm_warehouse_gayload gl 
@@ -53,6 +54,7 @@ def get_scf_appointment() -> pd.DataFrame:
 	LEFT JOIN sys_warehouse w ON gl.warehouse_id = w.id 
 	WHERE gl.mark= 1 AND gl.`STATUS` IN (0,1)
 	GROUP BY gl.id
+	HAVING count(b.id) > 0
 ) AS temp 
 WHERE createTime > '2026-01-01 00:00:00' 
 ORDER BY warehouseCode,createTime DESC;
@@ -64,7 +66,7 @@ ORDER BY warehouseCode,createTime DESC;
         (container['pgaStatus'] == 2) &
         (container['warehouseCode'] == 'JFK1')&(container['conStatus']=='inbound')]
     container_info = container_[container_['containerNo'].str.startswith('99M', na=False)]
-    container_info['ata']=container_info[container_info['ata']-pd.Timedelta(hours=5)]
+    container_info['ata']=container_info['ata']-pd.Timedelta(hours=5)
     container_info['scf_type']='1'
 
     """
