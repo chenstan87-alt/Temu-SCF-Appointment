@@ -94,7 +94,7 @@ ORDER BY warehouseCode,createTime DESC;
     """
     读取美国法定假日
     """
-    us_holiday = pd.read_excel('/Users/stan/PycharmProjects/pythonProject/生产数据分析/时效数据/KPI prealert/USPS美国法定假日.xlsx')
+    us_holiday = pd.read_excel('USPS美国法定假日.xlsx')
     us_holiday_list=us_holiday['日期'].to_list()
     us_holiday_list = pd.to_datetime(us_holiday_list).date
 
@@ -119,7 +119,7 @@ ORDER BY warehouseCode,createTime DESC;
     container_info["customs_del"] = container_info.apply(add_3_5_business_days,axis=1)
 
     #scf_trip_time=pd.read_excel('scf_trip_time.xlsx')
-    scf_trip_time = pd.read_excel('/Users/stan/PycharmProjects/pythonProject/生产数据分析/时效数据/KPI prealert/scf_trip_time.xlsx')
+    scf_trip_time = pd.read_excel('scf_trip_time.xlsx')
     scf_transfer_time_dict=scf_trip_time.set_index('channel')['transfertime'].to_dict()
     container_info['scf_delivery_time'] =container_info['channel'].map(scf_transfer_time_dict).fillna(0)
     container_info = container_info.dropna(subset=['base_time','customs_del'])
