@@ -288,5 +288,6 @@ ORDER BY warehouseCode,createTime DESC;
     # 格式化输出
     if not df_final.empty:
         df_final['出库时间'] = df_final['出库时间'].dt.strftime('%Y-%m-%d %H:%M')
+    df_final.drop(columns='线路',axis=1,inplace=True)
 
     return df_final
